@@ -47,6 +47,25 @@ plugin executes, accounts, gates and (optionally) writes.
 12. `report` groups repeated observations (`count >= 2`) as a signal that a
     paired cycle is due; a group is never an automatic instruction change.
 
+## Telemetry scope: why shadow collection is not wired
+
+`ExposureStore` is fed by explicit `exposure` events. Automatic shadow collection
+was checked against the installed host and is **not available** through public
+surfaces:
+
+* `tools/skills_tool.py` records nothing on `skill_view`; no host hook carries the
+  viewed skill's identity.
+* Counters live in the sidecar `~/.hermes/skills/.usage.json`
+  (`tools/skill_usage.py`), keyed by skill name with `view_count`, `use_count`,
+  `patch_count` and timestamps.
+* A name is not a revision: the sidecar holds no package digest, so an outcome
+  cannot be attributed to the version that produced it.
+
+Attributing outcomes to a revision needs a separate minimal API extension that
+emits identity plus digest. Monkey-patching the host is refused, and a counter is
+never reported as causal evidence. Until that extension exists the lane stays
+explicit-in, explicit-bind, and `unknown` is never reported as `failed`.
+
 ## Commands
 
 ```bash

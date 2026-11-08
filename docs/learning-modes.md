@@ -32,19 +32,19 @@ plugin executes, accounts, gates and (optionally) writes.
    concurrency slot but never refunds the daily counter.
 5. A job has a wall-clock deadline from `default_job_deadline_seconds`; once it
    passes, the next stage is not dispatched and the job ends `deadline_exceeded`.
-4. A delta is small and typed: at most 8 operations, 3 files, 8000 characters,
+6. A delta is small and typed: at most 8 operations, 3 files, 8000 characters,
    bound to the base digest it was produced from.
-5. A publish needs an `auto_publish` decision *and* a native writer. Without the
+7. A publish needs an `auto_publish` decision *and* a native writer. Without the
    writer the cycle stops at `human_approval_required`; nothing is written.
-6. Heavy adds one bounded reviewer call. `changes_required` blocks publication
+8. Heavy adds one bounded reviewer call. `changes_required` blocks publication
    but does not rewrite the gate decision; the finding is preserved as evidence.
-7. A lesson never becomes an instruction without a Standard cycle and paired
+9. A lesson never becomes an instruction without a Standard cycle and paired
    evidence.
-8. Budgets are local to the profile and are never described as provider quota.
-9. `--dedupe` skips a Lite cycle whose evidence already produced a lesson in the
+10. Budgets are local to the profile and are never described as provider quota.
+11. `--dedupe` skips a Lite cycle whose evidence already produced a lesson in the
    same scope; without the flag every cycle is charged, because a repeated task
    is a new observation.
-10. `report` groups repeated observations (`count >= 2`) as a signal that a
+12. `report` groups repeated observations (`count >= 2`) as a signal that a
     paired cycle is due; a group is never an automatic instruction change.
 
 ## Commands

@@ -66,6 +66,21 @@ emits identity plus digest. Monkey-patching the host is refused, and a counter i
 never reported as causal evidence. Until that extension exists the lane stays
 explicit-in, explicit-bind, and `unknown` is never reported as `failed`.
 
+## One deliberate deviation from the upstream tool surface
+
+Upstream `AGENTS.md` fixes the plugin at four tools and forbids adding new lanes.
+The learning lane adds a fifth, `self_improvement_learning`, because Skillcraft
+must dispatch a learning stage with arguments the ledger can check (`action`,
+`allow_model_calls`, `cycle_id`, `dry_run`, `evidence`). Calling the plugin through
+a shell subprocess instead would move the same authority into an unverifiable
+string and lose the per-call reservation.
+
+It is not a second apply/approve/rollback lane: the tool has no verb that mutates
+a package on its own, and publication still needs the gate plus the host's native
+writer. Reversing the deviation is one line — drop the entry from
+`provides_tools` and the handler map; `hermes self-improvement learning` keeps
+working, at the cost of a less checkable Skillcraft call path.
+
 ## Commands
 
 ```bash

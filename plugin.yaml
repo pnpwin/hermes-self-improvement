@@ -1,5 +1,5 @@
 name: hermes-self-improvement
-version: 1.0.0
+version: 1.1.0
 description: Observes Hermes runtime events and provides offline self-improvement analysis, proposal, scoring, and reports for skills and memory.
 provides_hooks:
   - pre_tool_call
@@ -18,3 +18,4 @@ provides_tools:
   - self_improvement_report
   - self_improvement_improve
   - self_improvement_calibrate
+  - self_improvement_learning

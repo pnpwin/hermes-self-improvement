@@ -50,9 +50,42 @@ SELF_IMPROVEMENT_CALIBRATE_SCHEMA = {
     },
 }
 
+SELF_IMPROVEMENT_LEARNING_SCHEMA = {
+    "name": "self_improvement_learning",
+    "description": (
+        "Skillcraft learning lane: status/check/report are read-only; lesson/learn dispatch "
+        "model calls only with allow_model_calls=true and write a skill package only through "
+        "the host's native writer. Lite saves a lesson, Standard proposes a bounded delta, "
+        "Heavy runs a capped search."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["status", "check", "lesson", "learn", "report", "exposure"],
+            },
+            "config_path": CONFIG_PATH_PROPERTY,
+            "package": {"type": "string", "description": "Absolute path to the skill directory under test."},
+            "cases": {"type": "string", "description": "Path to a frozen JSON case file for Standard/Heavy."},
+            "evidence": {"type": "string", "description": "Trial evidence: an object, JSON text or a path."},
+            "cycle_id": {"type": "string", "description": "Idempotency key; the same id never spends twice."},
+            "allow_model_calls": {"type": "boolean", "default": False},
+            "dry_run": {"type": "boolean", "default": False},
+            "cwd": {"type": "string", "description": "Project directory; decides project vs home scope."},
+            "skill_name": {"type": "string", "description": "Skill name for an exposure summary."},
+            "record": {"type": "object", "description": "Record one exposure event."},
+            "bind": {"type": "object", "description": "Bind a confirmed outcome to an exposure."},
+            "search": {"type": "object", "description": "Bounded Heavy search manifest."},
+        },
+        "required": ["action"],
+    },
+}
+
 SELF_IMPROVEMENT_TOOL_SPECS = (
     ("self_improvement_status", SELF_IMPROVEMENT_STATUS_SCHEMA),
     ("self_improvement_report", SELF_IMPROVEMENT_REPORT_SCHEMA),
     ("self_improvement_improve", SELF_IMPROVEMENT_IMPROVE_SCHEMA),
     ("self_improvement_calibrate", SELF_IMPROVEMENT_CALIBRATE_SCHEMA),
+    ("self_improvement_learning", SELF_IMPROVEMENT_LEARNING_SCHEMA),
 )

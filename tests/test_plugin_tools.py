@@ -57,6 +57,9 @@ def test_register_exposes_curator_aligned_tool_surface():
         "self_improvement_report",
         "self_improvement_improve",
         "self_improvement_calibrate",
+        # The Skillcraft learning lane adds exactly one tool, not a second lane
+        # of apply/approve/rollback verbs.
+        "self_improvement_learning",
     }
     assert not {
         "self_improvement_plan",

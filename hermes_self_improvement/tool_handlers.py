@@ -576,3 +576,14 @@ def _handle_self_improvement_improve_tool(args: dict[str, Any] | None = None, **
         return tool_result(_compact_improve_tool_result(result))
     except Exception as exc:
         return tool_error("improve_failed", error_detail=str(exc), target_changed=False)
+
+
+def _handle_self_improvement_learning_tool(args: dict[str, Any] | None = None, **_kw) -> str:
+    """Skillcraft learning lane entry point; never mutates without an explicit acknowledgement."""
+    from .learning_runtime import run_action
+
+    args = args or {}
+    try:
+        return tool_result(run_action(dict(args)))
+    except Exception as exc:  # pragma: no cover - defensive tool boundary
+        return tool_error("learning_failed", error_detail=str(exc), target_changed=False)

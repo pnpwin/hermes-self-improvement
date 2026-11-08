@@ -2818,10 +2818,50 @@ def _setup_cli(parser: argparse.ArgumentParser) -> None:
     _add_config_argument(p_calibrate)
     p_calibrate.set_defaults(func=_handle_cli)
 
+    p_learning = sub.add_parser(
+        "learning",
+        help="Skillcraft learning lane: status/check/lesson/learn/report/exposure",
+    )
+    p_learning.add_argument(
+        "--action",
+        default="status",
+        choices=["status", "check", "lesson", "learn", "report", "exposure"],
+    )
+    p_learning.add_argument("--package", default=None, help="Skill directory under test")
+    p_learning.add_argument("--cases", default=None, help="Frozen JSON case file for Standard/Heavy")
+    p_learning.add_argument("--evidence", default=None, help="Evidence object, JSON text or path")
+    p_learning.add_argument("--cycle-id", default=None, help="Idempotency key for this cycle")
+    p_learning.add_argument("--dry-run", action="store_true")
+    p_learning.add_argument(
+        "--allow-model-calls",
+        action="store_true",
+        help="Acknowledge paid/model inference for lesson/learn",
+    )
+    p_learning.add_argument("--json", action="store_true", dest="as_json")
+    _add_config_argument(p_learning)
+    p_learning.set_defaults(func=_handle_cli)
+
 
 def _handle_cli(args: argparse.Namespace) -> None:
     config = load_config(cli_config_path=getattr(args, "config_path", None))
     cmd = getattr(args, "self_improvement_cmd", None) or "status"
+
+    if cmd == "learning":
+        from .learning_runtime import format_result, run_action
+
+        payload = run_action(
+            {
+                "action": getattr(args, "action", "status"),
+                "package": getattr(args, "package", None),
+                "cases": getattr(args, "cases", None),
+                "evidence": getattr(args, "evidence", None),
+                "cycle_id": getattr(args, "cycle_id", None),
+                "dry_run": bool(getattr(args, "dry_run", False)),
+                "allow_model_calls": bool(getattr(args, "allow_model_calls", False)),
+            }
+        )
+        print(format_result(payload))
+        return
 
     if cmd == "setup":
         if bool(getattr(args, "reset", False)):

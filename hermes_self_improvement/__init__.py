@@ -23,13 +23,14 @@ from .config import (
     normalize_calibration_config,
 )
 PLUGIN_NAME = "hermes-self-improvement"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.1.0"
 UTC = timezone.utc
 
 from .schemas import SELF_IMPROVEMENT_TOOL_SPECS
 from .tool_handlers import (
     _handle_self_improvement_calibrate_tool,
     _handle_self_improvement_improve_tool,
+    _handle_self_improvement_learning_tool,
     _handle_self_improvement_report_tool,
     _handle_self_improvement_status_tool,
 )
@@ -38,6 +39,7 @@ _SELF_IMPROVEMENT_TOOL_HANDLERS = {
     "self_improvement_report": _handle_self_improvement_report_tool,
     "self_improvement_improve": _handle_self_improvement_improve_tool,
     "self_improvement_calibrate": _handle_self_improvement_calibrate_tool,
+    "self_improvement_learning": _handle_self_improvement_learning_tool,
 }
 
 

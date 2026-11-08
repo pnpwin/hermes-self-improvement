@@ -29,6 +29,8 @@ DEFAULT_BUDGET = {
     "heavy_job_model_calls": 20,
     "max_concurrent_model_calls": 1,
     "default_job_deadline_seconds": 900,
+    # Off by default: the lane may write a package only when the operator opts in.
+    "auto_publish_enabled": False,
 }
 DEFAULT_ROUTES = {role: None for role in ROUTE_ROLES}
 
@@ -113,6 +115,10 @@ def normalize_budget(raw: Any) -> dict[str, Any]:
             budget[key] = _positive_int(value, key, maximum=8)
         elif key == "default_job_deadline_seconds":
             budget[key] = _positive_int(value, key, maximum=4 * 3600)
+        elif key == "auto_publish_enabled":
+            if type(value) is not bool:
+                raise LearningPolicyError("auto_publish_enabled must be a boolean")
+            budget[key] = value
         else:
             budget[key] = _positive_int(value, key, maximum=2000)
     if budget["lite_daily_model_calls"] > budget["daily_model_calls"]:

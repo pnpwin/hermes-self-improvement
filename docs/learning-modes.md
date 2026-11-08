@@ -36,6 +36,13 @@ plugin executes, accounts, gates and (optionally) writes.
    bound to the base digest it was produced from.
 7. A publish needs an `auto_publish` decision *and* a native writer. Without the
    writer the cycle stops at `human_approval_required`; nothing is written.
+   `learning_writer` binds the writer to the host's own `skill_manage`, so every
+   write keeps the native guards, lock and approval gate. It refuses on base-digest
+   drift, checks every patch match and removal digest *before* the first write, and
+   reports a staged or refused write as `published: false` — an approval prompt is
+   not a publication. The host tool exists in the host, so the lane still needs
+   `learning_budget.auto_publish_enabled: true` (default `false`) before it will
+   use it: a writer that exists is not permission to write.
 8. Heavy adds one bounded reviewer call. `changes_required` blocks publication
    but does not rewrite the gate decision; the finding is preserved as evidence.
 9. A lesson never becomes an instruction without a Standard cycle and paired

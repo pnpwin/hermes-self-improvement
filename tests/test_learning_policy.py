@@ -168,3 +168,10 @@ def test_summary_is_compact_and_secret_free():
     assert summary["routes_configured"] == ["reflector"]
     assert "api_key" not in str(summary)
     assert "m" not in summary["routes_missing"]
+
+
+def test_auto_publish_is_off_by_default_and_must_be_a_real_boolean():
+    assert lp.DEFAULT_BUDGET["auto_publish_enabled"] is False
+    assert lp.normalize_budget({"auto_publish_enabled": True})["auto_publish_enabled"] is True
+    with pytest.raises(lp.LearningPolicyError, match="auto_publish_enabled"):
+        lp.normalize_budget({"auto_publish_enabled": "true"})

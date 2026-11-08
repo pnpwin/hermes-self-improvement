@@ -271,11 +271,23 @@ def _build_deps(home: Any, *, package_root: Path, cases_path: Any) -> dict[str, 
 
 
 def _native_writer(home: Any) -> Callable[..., dict[str, Any]] | None:
-    """Automatic writes stay unavailable unless the host exposes a writer."""
+    """Automatic writes stay unavailable unless the host exposes a writer.
+
+    An explicit ``_learning_native_writer`` callable is an operator decision and
+    wins. Otherwise the host's own skill tool is used, but only when the profile
+    policy enables ``auto_publish_enabled``: a writer that exists is not yet
+    permission to write.
+    """
+    from . import learning_writer as lwd
     from .config import load_config
 
     config = load_config() or {}
     writer = config.get("_learning_native_writer")
+    if callable(writer):
+        return writer
+    if not policy_for(home).get("budget", {}).get("auto_publish_enabled"):
+        return None
+    writer = lwd.build_writer()
     return writer if callable(writer) else None
 
 

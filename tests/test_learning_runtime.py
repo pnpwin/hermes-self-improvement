@@ -52,6 +52,22 @@ def _package(home: Path) -> Path:
     return root
 
 
+def test_auto_write_is_off_until_the_profile_opts_in(tmp_path, monkeypatch):
+    from hermes_self_improvement import learning_writer as lwd
+
+    monkeypatch.setattr(lwd, "_load_manage", lambda: (lambda **kw: '{"success": true}'))
+    home = _home(tmp_path)
+    assert rt._native_writer(home) is None
+
+    lines = (home / "config.yaml").read_text(encoding="utf-8")
+    lines = lines.replace(
+        "        heavy_enabled: false",
+        "        heavy_enabled: false\n        learning_budget:\n          auto_publish_enabled: true",
+    )
+    (home / "config.yaml").write_text(lines, encoding="utf-8")
+    assert callable(rt._native_writer(home))
+
+
 def test_status_is_read_only(tmp_path):
     home = _home(tmp_path)
     result = rt.run_action({"action": "status"}, home=home)

@@ -40,7 +40,10 @@ plugin executes, accounts, gates and (optionally) writes.
    write keeps the native guards, lock and approval gate. It refuses on base-digest
    drift, checks every patch match and removal digest *before* the first write, and
    reports a staged or refused write as `published: false` — an approval prompt is
-   not a publication. The host tool exists in the host, so the lane still needs
+   not a publication. Such a refusal is `PublishDeferred`: the cycle completes and
+   records `human_approval_required` with the writer's reason. Only a digest
+   mismatch after a real write is an invalid stage, because the package then holds
+   a revision nobody assessed. The host tool exists in the host, so the lane still needs
    `learning_budget.auto_publish_enabled: true` (default `false`) before it will
    use it: a writer that exists is not permission to write.
 8. Heavy adds one bounded reviewer call. `changes_required` blocks publication

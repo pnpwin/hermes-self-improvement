@@ -22,6 +22,14 @@ class PublishError(ValueError):
     """Raised when a publish is attempted outside the gate's contract."""
 
 
+class PublishDeferred(RuntimeError):
+    """The writer declined or staged the write; a human must decide.
+
+    Distinct from :class:`PublishError`: nothing is wrong with the candidate or
+    the gate, so the cycle is not an invalid stage. It simply did not write.
+    """
+
+
 def _count(value: Any, name: str) -> int:
     if type(value) is bool or not isinstance(value, int) or value < 0:
         raise PublishError(f"{name} must be a nonnegative integer")
@@ -145,7 +153,8 @@ def publish_candidate(
 
     result = native_writer(delta=delta, target_root=str(target), base_digest=target_digest)
     if not isinstance(result, dict) or result.get("published") is not True:
-        raise PublishError("native writer did not confirm publication")
+        reason = result.get("reason") if isinstance(result, dict) else None
+        raise PublishDeferred(f"native writer did not publish: {reason or 'unconfirmed'}")
 
     after = sd.package_digest(target)
     if after != expected_candidate_digest:

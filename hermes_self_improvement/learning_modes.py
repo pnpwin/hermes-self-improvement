@@ -424,15 +424,20 @@ def _publish_if_allowed(
         scope_mod.assert_target(scope, target, home=deps.get("home"))
     except scope_mod.ScopeError as exc:
         return {"published": False, "decision": "human_approval_required", "reasons": [str(exc)]}
-    result = pub.publish_candidate(
-        decision=assessment,
-        delta=candidate["delta"],
-        staging_root=candidate["staged"]["staging_root"],
-        target_root=target,
-        native_writer=writer,
-        expected_base_digest=base_digest,
-        expected_candidate_digest=candidate["staged"]["candidate_digest"],
-    )
+    try:
+        result = pub.publish_candidate(
+            decision=assessment,
+            delta=candidate["delta"],
+            staging_root=candidate["staged"]["staging_root"],
+            target_root=target,
+            native_writer=writer,
+            expected_base_digest=base_digest,
+            expected_candidate_digest=candidate["staged"]["candidate_digest"],
+        )
+    except pub.PublishDeferred as exc:
+        # The host declined or staged the write. Nothing is wrong with the
+        # candidate, so this is a deferred decision, not an invalid stage.
+        return {"published": False, "decision": "human_approval_required", "reasons": [str(exc)]}
     return {"published": True, **result}
 
 

@@ -109,7 +109,12 @@ def build_writer(*, manage: Callable[..., Any] | None = None) -> Callable[..., d
                 "reason": "base_digest_drift",
                 "applied_ops": 0,
             }
-        clean = sd.validate_delta(delta, base_digest=base_digest, package_root=root)
+        # The lane hands over its own validated form, which also carries
+        # bookkeeping such as ``changed_characters``. Re-validate the structural
+        # pair so the caps and containment are re-checked against this package,
+        # without rejecting the lane's own normalized shape.
+        structural = {"base_digest": delta.get("base_digest"), "ops": delta.get("ops")}
+        clean = sd.validate_delta(structural, base_digest=base_digest, package_root=root)
         _preflight(root, clean["ops"])
         name = root.name
         applied = 0

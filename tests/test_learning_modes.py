@@ -281,6 +281,68 @@ def test_standard_publishes_only_through_the_native_writer(tmp_path):
     assert store.proposals(job_id="job-1")[0]["decision"] == "auto_publish"
 
 
+def _host_tool(root: Path):
+    """A stand-in for the host skill_manage: mutations only, JSON answers."""
+
+    calls: list[dict] = []
+
+    def manage(**kwargs):
+        calls.append(kwargs)
+        target = root / kwargs["file_path"]
+        if kwargs["action"] == "patch":
+            text = target.read_text(encoding="utf-8")
+            assert kwargs["old_string"] in text
+            target.write_text(
+                text.replace(kwargs["old_string"], kwargs["new_string"], 1), encoding="utf-8"
+            )
+        return json.dumps({"success": True})
+
+    manage.calls = calls  # type: ignore[attr-defined]
+    return manage
+
+
+def test_the_real_writer_reaches_the_digest_the_gate_assessed(tmp_path):
+    """The two halves must agree: the writer applies, the gate re-checks the digest."""
+    from hermes_self_improvement import learning_writer as lw
+
+    root = _package(tmp_path / "home" / ".agents" / "skills" / "demo")
+    before = sd.package_digest(root)
+    tool = _host_tool(root)
+    deps, calls, _ = _deps(tmp_path, root, writer=lw.build_writer(manage=tool))
+    result, _, _ = _run(tmp_path, policy=_policy(lite_enabled=False, standard_enabled=True), deps=deps)
+
+    assert result["status"] == "standard_cycle_complete", result
+    assert result["assessment"]["decision"] == "auto_publish"
+    publish = result["publish"]
+    assert publish["published"] is True
+    assert publish["verification"] == "digest_match"
+    assert publish["writer"] == "host_skill_tool"
+    assert sd.package_digest(root) == publish["candidate_digest"] != before
+    assert [call["action"] for call in tool.calls] == ["patch"]
+    assert tool.calls[0]["name"] == "demo"
+
+
+def test_a_staged_host_write_is_not_published(tmp_path):
+    """An approval prompt must never be recorded as a published revision."""
+    from hermes_self_improvement import learning_writer as lw
+
+    root = _package(tmp_path / "home" / ".agents" / "skills" / "demo")
+    before = sd.package_digest(root)
+    staged = lambda **kwargs: json.dumps({"success": True, "staged": True})
+    deps, _, _ = _deps(tmp_path, root, writer=lw.build_writer(manage=staged))
+    result, _, _ = _run(tmp_path, policy=_policy(lite_enabled=False, standard_enabled=True), deps=deps)
+
+    # The gate approved; the host deferred. That is a deferred decision, not a
+    # broken stage, so the cycle still completes and names the writer's reason.
+    assert result["status"] == "standard_cycle_complete", result
+    assert result["assessment"]["decision"] == "auto_publish"
+    assert result["publish"]["published"] is False
+    assert result["publish"]["decision"] == "human_approval_required"
+    assert "staged_for_approval" in result["publish"]["reasons"][0]
+    assert result["instruction_changed"] is False
+    assert sd.package_digest(root) == before
+
+
 def test_standard_without_a_writer_keeps_the_incumbent(tmp_path):
     root = _package(tmp_path / "home" / ".agents" / "skills" / "demo")
     before = sd.package_digest(root)

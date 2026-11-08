@@ -2833,6 +2833,11 @@ def _setup_cli(parser: argparse.ArgumentParser) -> None:
     p_learning.add_argument("--cycle-id", default=None, help="Idempotency key for this cycle")
     p_learning.add_argument("--dry-run", action="store_true")
     p_learning.add_argument(
+        "--dedupe",
+        action="store_true",
+        help="Skip a Lite cycle whose evidence already produced a lesson in this scope",
+    )
+    p_learning.add_argument(
         "--allow-model-calls",
         action="store_true",
         help="Acknowledge paid/model inference for lesson/learn",
@@ -2857,6 +2862,7 @@ def _handle_cli(args: argparse.Namespace) -> None:
                 "evidence": getattr(args, "evidence", None),
                 "cycle_id": getattr(args, "cycle_id", None),
                 "dry_run": bool(getattr(args, "dry_run", False)),
+                "dedupe": bool(getattr(args, "dedupe", False)),
                 "allow_model_calls": bool(getattr(args, "allow_model_calls", False)),
             }
         )

@@ -77,6 +77,11 @@ SELF_IMPROVEMENT_LEARNING_SCHEMA = {
             "record": {"type": "object", "description": "Record one exposure event."},
             "bind": {"type": "object", "description": "Bind a confirmed outcome to an exposure."},
             "search": {"type": "object", "description": "Bounded Heavy search manifest."},
+            "dedupe": {
+                "type": "boolean",
+                "default": False,
+                "description": "Skip a Lite cycle whose evidence already produced a lesson in this scope.",
+            },
         },
         "required": ["action"],
     },

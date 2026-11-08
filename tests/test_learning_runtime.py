@@ -172,3 +172,28 @@ def test_unknown_action_is_rejected(tmp_path):
     home = _home(tmp_path)
     assert rt.run_action({"action": "train"}, home=home)["ok"] is False
     assert rt.run_action({}, home=home)["ok"] is False
+
+
+def test_report_includes_recurring_observations(tmp_path):
+    from hermes_self_improvement import learning_runtime as lr
+
+    home = tmp_path / "home"
+    home.mkdir()
+    report = lr.run_action({"action": "report"}, home=home)
+    assert report["ok"] is True
+    assert report["recurring"] == []
+
+    store = lr._store(home)
+    lesson = {
+        "kind": "lesson",
+        "observation": "the parser dropped empty fields",
+        "hypothesis": "splitting on tabs keeps trailing empties",
+        "evidence_ids": ["t1"],
+        "confidence": "medium",
+        "scope": "home",
+    }
+    store.save_lesson(job_id="job-1", scope_id="home:/h", lesson=lesson)
+    store.save_lesson(job_id="job-2", scope_id="home:/h", lesson=lesson)
+    report = lr.run_action({"action": "report"}, home=home)
+    assert report["recurring"][0]["count"] == 2
+    assert report["model_calls"] == 0

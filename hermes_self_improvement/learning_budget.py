@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS day_usage (
 CREATE INDEX IF NOT EXISTS invocations_job ON invocations(job_id);
 """
 
+DEFAULT_STALE_SECONDS = 1800
+
 class BudgetError(ValueError):
     """Raised for malformed ledger input, never for a plain denial."""
 
@@ -160,6 +162,8 @@ class Ledger:
         daily_cap: int,
         lite_daily_cap: int,
         lite: bool = False,
+        max_concurrent: int | None = None,
+        stale_after_seconds: int = DEFAULT_STALE_SECONDS,
     ) -> dict[str, Any]:
         _require_text(job_id, "job_id")
         _require_text(invocation_id, "invocation_id")
@@ -167,9 +171,14 @@ class Ledger:
         _require_text(day, "day")
         if not isinstance(route, dict):
             raise BudgetError("route must be an object")
+        if max_concurrent is not None and (type(max_concurrent) is not int or max_concurrent < 1):
+            raise BudgetError("max_concurrent must be a positive integer")
+        if type(stale_after_seconds) is not int or stale_after_seconds < 1:
+            raise BudgetError("stale_after_seconds must be a positive integer")
         conn = self._connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
+            self._reap(conn, stale_after_seconds)
             job = conn.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
             if job is None:
                 conn.execute("COMMIT")
@@ -191,6 +200,18 @@ class Ledger:
                     "invocation_id": invocation_id,
                     "status": existing["status"],
                 }
+            if max_concurrent is not None:
+                active = conn.execute(
+                    "SELECT COUNT(*) AS n FROM invocations WHERE status='reserved'"
+                ).fetchone()["n"]
+                if active >= max_concurrent:
+                    conn.execute("COMMIT")
+                    return {
+                        "admitted": False,
+                        "reason": "concurrency_limit",
+                        "active": active,
+                        "max_concurrent": max_concurrent,
+                    }
             # Every reservation consumes its slot permanently: an ambiguous or
             # timed-out attempt may still have been billed by the provider.
             used_job = conn.execute(
@@ -319,6 +340,19 @@ class Ledger:
         finally:
             conn.close()
 
+    def reap_stale(self, *, older_than_seconds: int = DEFAULT_STALE_SECONDS) -> dict[str, Any]:
+        """Mark abandoned reservations ambiguous; the spent budget slot stays spent."""
+        if type(older_than_seconds) is not int or older_than_seconds < 1:
+            raise BudgetError("older_than_seconds must be a positive integer")
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            reaped = self._reap(conn, older_than_seconds)
+            conn.execute("COMMIT")
+            return {"reaped": reaped, "older_than_seconds": older_than_seconds}
+        finally:
+            conn.close()
+
     def status(self, day: str, *, daily_cap: int, lite_daily_cap: int) -> dict[str, Any]:
         conn = self._connect()
         try:
@@ -342,6 +376,15 @@ class Ledger:
             "SELECT calls FROM day_usage WHERE day=? AND bucket=?", (day, bucket)
         ).fetchone()
         return int(row["calls"]) if row is not None else 0
+
+    def _reap(self, conn: sqlite3.Connection, older_than_seconds: int) -> int:
+        """Free the concurrency slot of an abandoned call without refunding it."""
+        cutoff = self.clock() - older_than_seconds
+        cursor = conn.execute(
+            "UPDATE invocations SET status='ambiguous' WHERE status='reserved' AND reserved_at < ?",
+            (cutoff,),
+        )
+        return int(cursor.rowcount or 0)
 
     def _bump(self, conn: sqlite3.Connection, day: str, bucket: str, delta: int) -> None:
         conn.execute(

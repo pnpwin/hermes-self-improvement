@@ -58,6 +58,7 @@ def _deps(
     scan: dict | None = None,
     writer=None,
     delta_factory=None,
+    review: dict | None = None,
 ):
     calls: list[dict] = []
     state = {"staging_index": 0}
@@ -94,6 +95,11 @@ def _deps(
             "scan": dict(scan or CLEAN_SCAN),
         }
 
+    def reviewer(payload, route):
+        calls.append({"role": "reviewer", "route": route, "prompt": payload["prompt"]})
+        body = review or {"verdict": "approve", "findings": []}
+        return {"text": json.dumps(body), "usage": {"output_tokens": 5}}
+
     def staging(base_root):
         state["staging_index"] += 1
         target = tmp_path / f"staging-{state['staging_index']}"
@@ -104,6 +110,7 @@ def _deps(
         "reflector": reflector,
         "curator": curator,
         "evaluator": evaluator,
+        "reviewer": reviewer,
         "staging": staging,
         "package_root": root,
         "calls": calls,
@@ -127,7 +134,7 @@ def _scope(tmp_path: Path) -> dict:
     return ss.resolve_scope(home, home)
 
 
-def _run(tmp_path, *, policy=None, deps, scope=None, job_id="job-1", evidence=None, dry_run=False, manifest=None):
+def _run(tmp_path, *, policy=None, deps, scope=None, job_id="job-1", evidence=None, dry_run=False, manifest=None, deadline=None, dedupe=False):
     scope = scope or _scope(tmp_path)
     ledger = lb.Ledger(tmp_path / "budget.sqlite3")
     store = ls.LessonStore(tmp_path / "lessons.sqlite3")
@@ -142,6 +149,8 @@ def _run(tmp_path, *, policy=None, deps, scope=None, job_id="job-1", evidence=No
         deps=deps,
         dry_run=dry_run,
         search_manifest=manifest,
+        deadline=deadline,
+        dedupe=dedupe,
     )
     return result, ledger, store
 
@@ -262,7 +271,7 @@ def test_standard_publishes_only_through_the_native_writer(tmp_path):
     before = sd.package_digest(root)
     deps, calls, _ = _deps(tmp_path, root, writer=_writer(root))
     result, ledger, store = _run(tmp_path, policy=_policy(lite_enabled=False, standard_enabled=True), deps=deps)
-    assert result["status"] == "standard_cycle_complete"
+    assert result["status"] == "standard_cycle_complete", result
     assert result["assessment"]["decision"] == "auto_publish"
     assert result["publish"]["published"] is True
     assert result["instruction_changed"] is True
@@ -369,7 +378,15 @@ def test_heavy_search_is_bounded_and_publishes_at_most_once(tmp_path):
     )
     assert result["status"] == "heavy_search_complete"
     assert result["search"]["evaluations"] == 1
-    assert len(calls) == 5
+    assert [call["role"] for call in calls] == [
+        "reflector",
+        "curator",
+        "task",
+        "curator",
+        "task",
+        "reviewer",
+    ]
+    assert result["review"]["verdict"] == "approve"
     assert result["publish"]["published"] is True
     published_events = [row for row in store.proposals(job_id="job-1")]
     assert len(published_events) == 1
@@ -422,3 +439,73 @@ def test_parse_lesson_keeps_evidence_and_flags_instructions():
     with pytest.raises(lm.LearningError):
         lm.parse_lesson(json.dumps({**LESSON, "evidence_ids": []}))
     assert lm.parse_lesson("```json\n" + json.dumps(LESSON) + "\n```")["kind"] == "lesson"
+
+
+# -- M2/M4/M5 additions --------------------------------------------------
+
+
+def test_deadline_stops_before_any_dispatch(tmp_path):
+    root = _package(tmp_path / "home" / ".agents" / "skills" / "demo")
+    deps, calls, _ = _deps(tmp_path, root)
+    result, ledger, _ = _run(
+        tmp_path,
+        policy=_policy(lite_enabled=True, standard_enabled=False),
+        deps=deps,
+        deadline=0.0,
+    )
+    assert result["status"] == "deadline_exceeded"
+    assert result["model_calls"] == 0
+    assert calls == []
+    assert ledger.job("job-1")["outcome"] == "deadline_exceeded"
+
+
+def test_identical_evidence_is_not_charged_twice(tmp_path):
+    root = _package(tmp_path / "home" / ".agents" / "skills" / "demo")
+    deps, calls, _ = _deps(tmp_path, root)
+    policy = _policy(lite_enabled=True, standard_enabled=False)
+    first, ledger, store = _run(tmp_path, policy=policy, deps=deps, job_id="job-1")
+    assert first["status"] == "lesson_saved"
+    second, _, _ = _run(tmp_path, policy=policy, deps=deps, job_id="job-2", dedupe=True)
+    assert second["status"] == "lesson_duplicate"
+    assert second["model_calls"] == 0
+    assert second["lesson_record"]["job_id"] == "job-1"
+    assert [call["role"] for call in calls] == ["reflector"]
+    assert ledger.job("job-2") is None
+
+
+def test_reviewer_can_block_publication_without_changing_the_gate(tmp_path):
+    root = _package(tmp_path / "home" / ".agents" / "skills" / "demo")
+    deps, calls, _ = _deps(
+        tmp_path,
+        root,
+        writer=_writer(root),
+        review={"verdict": "changes_required", "findings": ["the delta over-claims"]},
+    )
+    before = sd.package_digest(root)
+    result, _, _ = _run(
+        tmp_path,
+        policy=_policy(lite_enabled=False, standard_enabled=True, heavy_enabled=True),
+        deps=deps,
+        manifest={"rounds": 1, "variants_per_round": 1, "max_evaluations": 1, "seed": 3},
+    )
+    assert result["review"]["verdict"] == "changes_required"
+    assert result["assessment"]["decision"] == "auto_publish"
+    assert result["publish"]["published"] is False
+    assert result["publish"]["reasons"] == ["reviewer_changes_required"]
+    assert sd.package_digest(root) == before
+    assert calls[-1]["role"] == "reviewer"
+
+
+def test_heavy_without_a_reviewer_is_backend_unavailable(tmp_path):
+    root = _package(tmp_path / "home" / ".agents" / "skills" / "demo")
+    deps, calls, _ = _deps(tmp_path, root, writer=_writer(root))
+    deps.pop("reviewer")
+    result, _, _ = _run(
+        tmp_path,
+        policy=_policy(lite_enabled=False, standard_enabled=True, heavy_enabled=True),
+        deps=deps,
+        manifest={"rounds": 1, "variants_per_round": 1, "max_evaluations": 1, "seed": 3},
+    )
+    assert result["status"] == "backend_unavailable"
+    assert result["reason"] == "reviewer"
+    assert calls == []

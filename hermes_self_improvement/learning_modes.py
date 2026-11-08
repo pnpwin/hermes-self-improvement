@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -55,6 +56,14 @@ _INSTRUCTION = re.compile(
     r"(?im)^\s*(always|never|must|do not|don't|use |run |avoid )"
 )
 
+REVIEW_PROMPT = (
+    "You review one bounded skill revision that already passed or failed an evidence gate.\n"
+    "Reply with JSON only, exactly these keys:\n"
+    '{"verdict": "approve"|"changes_required", "findings": [str]}\n'
+    "Assess only the supplied delta, the recorded evidence and the gate decision. You cannot "
+    "approve publication; you may only ask for changes. Do not invent test results.\n"
+)
+
 
 class BudgetExhausted(RuntimeError):
     """Raised when the ledger refuses a reservation; carries the exact verdict."""
@@ -66,6 +75,10 @@ class BudgetExhausted(RuntimeError):
 
 class LearningError(RuntimeError):
     """Raised when a pipeline stage produced something outside its contract."""
+
+
+class DeadlineExceeded(RuntimeError):
+    """Raised when the job's wall-clock budget is exhausted before a dispatch."""
 
 
 def _digest(payload: dict[str, Any]) -> str:
@@ -159,10 +172,13 @@ def _invoke(
     fn: Callable[..., dict[str, Any]],
     payload: dict[str, Any],
     lite: bool,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     route = policy["routes"].get(role)
     if route is None:
         raise LearningError(f"{role}: no explicit route is configured")
+    if deadline is not None and time.monotonic() > deadline:
+        raise DeadlineExceeded(f"{role}: job deadline exceeded before dispatch")
     invocation_id = f"{job_id}:{index:02d}:{role}"
     verdict = ledger.reserve_call(
         job_id,
@@ -173,6 +189,7 @@ def _invoke(
         daily_cap=policy["budget"]["daily_model_calls"],
         lite_daily_cap=policy["budget"]["lite_daily_model_calls"],
         lite=lite,
+        max_concurrent=policy["budget"].get("max_concurrent_model_calls"),
     )
     if not verdict.get("admitted"):
         raise BudgetExhausted(verdict)
@@ -217,6 +234,7 @@ def _reflect(
         fn=deps["reflector"],
         payload={"prompt": prompt, "evidence": evidence},
         lite=lite,
+        deadline=deps.get("deadline"),
     )
     lesson = parse_lesson(_text(result, stage="reflector"))
     return lesson, result
@@ -251,6 +269,7 @@ def _curate(
         fn=deps["curator"],
         payload={"prompt": prompt, "lesson": lesson, "base_digest": base_digest},
         lite=False,
+        deadline=deps.get("deadline"),
     )
     data = _json_object(_text(result, stage="curator"), stage="curator")
     return sd.validate_delta(data, base_digest=base_digest, package_root=deps["package_root"])
@@ -291,6 +310,7 @@ def _evaluate(
             "evidence": evidence,
         },
         lite=False,
+        deadline=deps.get("deadline"),
     )
     for key in ("comparison", "holdout", "cases", "scan"):
         if not isinstance(result.get(key), dict):
@@ -325,6 +345,7 @@ def _prelude(
         scope_id=scope_mod.scope_id(scope),
         lesson=lesson,
         status="observation",
+        evidence_digest=deps.get("evidence_digest"),
     )
     return {"lesson": lesson, "lesson_record": saved, "reflection_usage": reflection.get("usage") or {}}
 
@@ -413,6 +434,55 @@ def _publish_if_allowed(
         expected_candidate_digest=candidate["staged"]["candidate_digest"],
     )
     return {"published": True, **result}
+
+
+def _review(
+    *,
+    policy: dict[str, Any],
+    ledger,
+    deps: dict[str, Any],
+    job_id: str,
+    day: str,
+    lesson: dict[str, Any],
+    delta: dict[str, Any],
+    assessment: dict[str, Any],
+    index: int,
+) -> dict[str, Any]:
+    """One bounded reviewer pass: evidence only, never an approval."""
+    prompt = (
+        REVIEW_PROMPT
+        + "\nDELTA:\n"
+        + json.dumps(sd.summarize(delta), ensure_ascii=False, sort_keys=True)[:4000]
+        + "\nASSESSMENT:\n"
+        + json.dumps(assessment, ensure_ascii=False, sort_keys=True)[:2000]
+        + "\nLESSON:\n"
+        + json.dumps(lesson, ensure_ascii=False, sort_keys=True)[:2000]
+    )
+    result = _invoke(
+        ledger=ledger,
+        policy=policy,
+        job_id=job_id,
+        day=day,
+        role="reviewer",
+        index=index,
+        fn=deps["reviewer"],
+        payload={"prompt": prompt},
+        lite=False,
+        deadline=deps.get("deadline"),
+    )
+    data = _json_object(_text(result, stage="reviewer"), stage="reviewer")
+    verdict = data.get("verdict")
+    if verdict not in ("approve", "changes_required"):
+        raise LearningError("reviewer verdict must be approve or changes_required")
+    findings = data.get("findings") or []
+    if not isinstance(findings, list) or any(not isinstance(item, str) for item in findings):
+        raise LearningError("reviewer findings must be a list of strings")
+    return {
+        "verdict": verdict,
+        "findings": findings,
+        "route": policy["routes"]["reviewer"],
+        "scope": "same-provider advisory review; not model independence and not an approval",
+    }
 
 
 def run_lite(
@@ -628,6 +698,18 @@ def run_heavy(
         "staged": best.get("staged") or incumbent["staged"],
         "assessment": assessment,
     }
+    review = _review(
+        policy=policy,
+        ledger=ledger,
+        deps=deps,
+        job_id=job_id,
+        day=day,
+        lesson=prelude["lesson"],
+        delta=candidate["delta"],
+        assessment=assessment,
+        index=counter["index"],
+    )
+    counter["index"] += 1
     store.save_proposal(
         job_id=job_id,
         scope_id=scope_mod.scope_id(scope),
@@ -637,6 +719,7 @@ def run_heavy(
         payload={
             "delta": sd.summarize(candidate["delta"]),
             "assessment": assessment,
+            "review": review,
             "search": {
                 "stopped_reason": result["stopped_reason"],
                 "evaluations": result["evaluations"],
@@ -652,9 +735,17 @@ def run_heavy(
             },
         },
     )
-    published = _publish_if_allowed(
-        deps=deps, scope=scope, job_id=job_id, base_digest=base_digest, candidate=candidate
-    )
+    if review["verdict"] == "changes_required":
+        published = {
+            "published": False,
+            "decision": "human_approval_required",
+            "reasons": ["reviewer_changes_required"],
+            "findings": review["findings"],
+        }
+    else:
+        published = _publish_if_allowed(
+            deps=deps, scope=scope, job_id=job_id, base_digest=base_digest, candidate=candidate
+        )
     _finish_job(ledger, job_id, "published" if published.get("published") else assessment["decision"])
     return {
         "status": "heavy_search_complete",
@@ -671,6 +762,7 @@ def run_heavy(
         "delta": sd.summarize(candidate["delta"]),
         "candidate_digest": candidate["staged"]["candidate_digest"],
         "assessment": assessment,
+        "review": review,
         "publish": published,
         "instruction_changed": bool(published.get("published")),
     }
@@ -699,6 +791,8 @@ def run_learning_cycle(
     deps: dict[str, Any],
     dry_run: bool = False,
     search_manifest: dict[str, Any] | None = None,
+    deadline: float | None = None,
+    dedupe: bool = False,
 ) -> dict[str, Any]:
     """Dispatch one learning cycle for the profile's current mode combination."""
     pipeline = policy["pipeline"]
@@ -721,15 +815,18 @@ def run_learning_cycle(
         for name in ("curator", "evaluator", "staging", "package_root"):
             if name not in deps:
                 return {**base, "status": "backend_unavailable", "reason": name, "model_calls": 0}
+    if "heavy" in pipeline and not callable(deps.get("reviewer")):
+        return {**base, "status": "backend_unavailable", "reason": "reviewer", "model_calls": 0}
 
     package_root = Path(deps["package_root"]).resolve() if deps.get("package_root") else None
     base_digest = sd.package_digest(package_root) if package_root is not None else "0" * 64
     day = lp.day_key(policy, when)
+    evidence_digest = scope_mod.context_digest(evidence)
     digest = manifest_digest(
         pipeline=pipeline,
         scope_id=scope_mod.scope_id(scope),
         base_digest=base_digest,
-        evidence_digest=scope_mod.context_digest(evidence),
+        evidence_digest=evidence_digest,
         policy=policy,
     )
     ceiling_key = lp.job_ceiling_key(pipeline)
@@ -743,6 +840,26 @@ def run_learning_cycle(
             "day": day,
             "model_calls": 0,
         }
+
+    if dedupe and pipeline == "lite":
+        existing = store.find_by_evidence(
+            scope_id=scope_mod.scope_id(scope), evidence_digest=evidence_digest
+        )
+        if existing is not None:
+            return {
+                **base,
+                "status": "lesson_duplicate",
+                "lesson_record": existing,
+                "reason": "identical evidence already produced a lesson in this scope",
+                "model_calls": 0,
+            }
+
+    job_deadline = (
+        deadline
+        if deadline is not None
+        else time.monotonic() + float(policy["budget"]["default_job_deadline_seconds"])
+    )
+    deps = {**deps, "deadline": job_deadline, "evidence_digest": evidence_digest}
 
     admission = ledger.reserve_job(
         job_id,
@@ -790,6 +907,15 @@ def run_learning_cycle(
     except BudgetExhausted as exc:
         _finish_job(ledger, job_id, f"budget_denied:{exc.verdict.get('reason')}")
         return {**base, "status": "budget_denied", "reason": exc.verdict.get("reason"), "detail": exc.verdict}
+    except DeadlineExceeded as exc:
+        _finish_job(ledger, job_id, "deadline_exceeded")
+        return {
+            **base,
+            "status": "deadline_exceeded",
+            "reason": str(exc),
+            "model_calls": len(ledger.job_invocations(job_id)),
+            "instruction_changed": False,
+        }
     except (LearningError, sd.DeltaError, pub.PublishError, scope_mod.ScopeError) as exc:
         _finish_job(ledger, job_id, "stopped_invalid_stage")
         return {**base, "status": "stopped_invalid_stage", "reason": str(exc), "instruction_changed": False}

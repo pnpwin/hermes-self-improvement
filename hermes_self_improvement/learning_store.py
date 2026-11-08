@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS lessons (
     scope_id TEXT NOT NULL,
     status TEXT NOT NULL,
     payload_json TEXT NOT NULL,
+    evidence_digest TEXT,
     created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS proposals (
@@ -70,6 +71,9 @@ class LessonStore:
             conn.execute("PRAGMA busy_timeout=30000")
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(lessons)")}
+            if "evidence_digest" not in columns:  # migration for a ledger created before M5
+                conn.execute("ALTER TABLE lessons ADD COLUMN evidence_digest TEXT")
         finally:
             conn.close()
 
@@ -86,6 +90,7 @@ class LessonStore:
         scope_id: str,
         lesson: dict[str, Any],
         status: str = "observation",
+        evidence_digest: str | None = None,
     ) -> dict[str, Any]:
         _text(job_id, "job_id")
         _text(scope_id, "scope_id")
@@ -93,6 +98,8 @@ class LessonStore:
             raise StoreError(f"unsupported lesson status: {status}")
         if not isinstance(lesson, dict):
             raise StoreError("lesson must be an object")
+        if evidence_digest is not None and (not isinstance(evidence_digest, str) or len(evidence_digest) != 64):
+            raise StoreError("evidence_digest must be a sha256 hex digest")
         blob = _jsonable(lesson, "lesson")
         conn = self._connect()
         try:
@@ -100,7 +107,7 @@ class LessonStore:
             row = conn.execute("SELECT * FROM lessons WHERE job_id=?", (job_id,)).fetchone()
             if row is not None:
                 conn.execute("COMMIT")
-                if row["payload_json"] != blob or row["status"] != status:
+                if row["payload_json"] != blob or row["status"] != status or row["evidence_digest"] != evidence_digest:
                     raise StoreError("this job already saved a different lesson")
                 return {
                     "lesson_id": row["lesson_id"],
@@ -110,14 +117,84 @@ class LessonStore:
                 }
             lesson_id = f"lesson-{uuid.uuid4().hex[:16]}"
             conn.execute(
-                "INSERT INTO lessons(lesson_id, job_id, scope_id, status, payload_json, created_at)"
-                " VALUES(?,?,?,?,?,?)",
-                (lesson_id, job_id, scope_id, status, blob, self.clock()),
+                "INSERT INTO lessons(lesson_id, job_id, scope_id, status, payload_json, evidence_digest, created_at)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (lesson_id, job_id, scope_id, status, blob, evidence_digest, self.clock()),
             )
             conn.execute("COMMIT")
             return {"lesson_id": lesson_id, "job_id": job_id, "status": status, "idempotent": False}
         finally:
             conn.close()
+
+    def find_by_evidence(self, *, scope_id: str, evidence_digest: str) -> dict[str, Any] | None:
+        """An identical evidence set already produced a lesson in this scope."""
+        _text(scope_id, "scope_id")
+        if not isinstance(evidence_digest, str) or len(evidence_digest) != 64:
+            raise StoreError("evidence_digest must be a sha256 hex digest")
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM lessons WHERE scope_id=? AND evidence_digest=?"
+                " ORDER BY created_at LIMIT 1",
+                (scope_id, evidence_digest),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        return {
+            "lesson_id": row["lesson_id"],
+            "job_id": row["job_id"],
+            "scope_id": row["scope_id"],
+            "status": row["status"],
+            "lesson": json.loads(row["payload_json"]),
+        }
+
+    def recurring(self, *, scope_id: str | None = None, min_occurrences: int = 2) -> list[dict[str, Any]]:
+        """Group lessons by normalized observation; a group is a signal, not a verdict."""
+        if type(min_occurrences) is not int or min_occurrences < 2:
+            raise StoreError("min_occurrences must be an integer >= 2")
+        rows = self.recent_lessons(scope_id=scope_id, limit=200)
+        groups: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            observation = row["lesson"].get("observation")
+            key = normalize_observation(observation)
+            if not key:
+                continue
+            group = groups.setdefault(
+                key,
+                {"observation": observation, "count": 0, "job_ids": [], "scopes": set(), "confidence": set()},
+            )
+            group["count"] += 1
+            group["job_ids"].append(row["job_id"])
+            group["scopes"].add(row["scope_id"])
+            group["confidence"].add(row["lesson"].get("confidence"))
+        result = []
+        for group in groups.values():
+            if group["count"] < min_occurrences:
+                continue
+            result.append(
+                {
+                    "observation": group["observation"],
+                    "count": group["count"],
+                    "job_ids": sorted(group["job_ids"]),
+                    "scopes": sorted(group["scopes"]),
+                    "confidence": sorted(item for item in group["confidence"] if item),
+                    "scope": "repeated observation; it still needs a paired cycle before any instruction change",
+                }
+            )
+        return sorted(result, key=lambda item: (-item["count"], item["observation"]))
+
+    def find_lesson(self, *, scope_id: str, observation: str) -> dict[str, Any] | None:
+        """Exact normalized-observation lookup inside one scope."""
+        _text(scope_id, "scope_id")
+        key = normalize_observation(observation)
+        if not key:
+            return None
+        for row in self.recent_lessons(scope_id=scope_id, limit=200):
+            if normalize_observation(row["lesson"].get("observation")) == key:
+                return row
+        return None
 
     def lesson(self, job_id: str) -> dict[str, Any] | None:
         conn = self._connect()
@@ -230,3 +307,10 @@ class LessonStore:
             }
             for row in rows
         ]
+
+
+def normalize_observation(value: Any) -> str:
+    """Whitespace- and case-insensitive key for grouping repeated observations."""
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split()).strip().lower()

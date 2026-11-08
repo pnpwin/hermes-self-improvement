@@ -56,12 +56,28 @@ def _exposure(home: Any = None) -> se.ExposureStore:
     return se.ExposureStore(state_dir(home) / "exposure.sqlite3")
 
 
-def _role_runner(role: str, home: Any = None) -> Callable[[str], tuple[str, dict[str, Any]]]:
-    """Adapt one tool-free role agent into a text callable."""
+def _role_runner(
+    role: str, home: Any = None, route: dict[str, str] | None = None
+) -> Callable[[str], tuple[str, dict[str, Any]]]:
+    """Adapt one tool-free role agent into a text callable.
+
+    ``route`` is applied to the role config so the dispatched provider/model/effort
+    is the same one the ledger recorded; a policy route is never decorative.
+    """
     from .config import load_config
     from .constrained_agent import run_tool_free_role_agent
 
     config = load_config()
+    if route:
+        model_cfg = dict(config.get("model") or {})
+        role_cfg = dict(model_cfg.get(role) or {})
+        role_cfg["provider"] = route["provider"]
+        role_cfg["model"] = route["model"]
+        extra = dict(role_cfg.get("extra_body") or {})
+        extra["reasoning"] = {"effort": route["reasoning"]}
+        role_cfg["extra_body"] = extra
+        model_cfg[role] = role_cfg
+        config = {**config, "model": model_cfg}
 
     def run(prompt: str) -> tuple[str, dict[str, Any]]:
         result = run_tool_free_role_agent(
@@ -83,7 +99,7 @@ def _model_callable(role: str) -> Callable[[dict[str, Any], dict[str, str]], dic
         prompt = payload.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise lm.LearningError("model payload has no prompt")
-        text, usage = _role_runner(role)(prompt)
+        text, usage = _role_runner(role, route=route)(prompt)
         return {"text": text, "usage": usage, "route": route}
 
     return call
@@ -209,6 +225,7 @@ def _build_deps(home: Any, *, package_root: Path, cases_path: Any) -> dict[str, 
     deps: dict[str, Any] = {
         "reflector": _model_callable("planner"),
         "curator": _model_callable("editor"),
+        "reviewer": _model_callable("planner"),
         "package_root": package_root,
         "home": lp._home(home),
     }
@@ -226,7 +243,6 @@ def _build_deps(home: Any, *, package_root: Path, cases_path: Any) -> dict[str, 
 
     if cases_path is not None:
         cases = lev.load_cases(Path(cases_path).expanduser().read_text(encoding="utf-8"))
-        task_runner = _role_runner("evaluator")
         candidate_holder: dict[str, str] = {}
 
         def evaluator(payload: dict[str, Any], route: dict[str, str]) -> dict[str, Any]:
@@ -235,6 +251,7 @@ def _build_deps(home: Any, *, package_root: Path, cases_path: Any) -> dict[str, 
             baseline_text = (base_root / "SKILL.md").read_text(encoding="utf-8")
             candidate_text = (candidate_root / "SKILL.md").read_text(encoding="utf-8")
             candidate_holder["text"] = candidate_text
+            task_runner = _role_runner("evaluator", route=route)
 
             def run(prompt: str) -> str:
                 text, _usage = task_runner(prompt)
@@ -288,6 +305,7 @@ def run_action(args: dict[str, Any], *, home: Any = None) -> dict[str, Any]:
                 "action": "report",
                 "lessons": store.recent_lessons(limit=20),
                 "proposals": store.proposals(limit=20),
+                "recurring": store.recurring(min_occurrences=2),
                 "model_calls": 0,
             }
         if action == "exposure":
@@ -321,6 +339,7 @@ def run_action(args: dict[str, Any], *, home: Any = None) -> dict[str, Any]:
             deps=deps,
             dry_run=bool(args.get("dry_run")),
             search_manifest=args.get("search") if isinstance(args.get("search"), dict) else None,
+            dedupe=bool(args.get("dedupe")),
         )
         result["ok"] = result.get("status") not in (
             "stopped_error",
@@ -328,6 +347,7 @@ def run_action(args: dict[str, Any], *, home: Any = None) -> dict[str, Any]:
             "backend_unavailable",
             "budget_denied",
             "route_unconfigured",
+            "deadline_exceeded",
         )
         result["auto_write_available"] = writer is not None
         return result

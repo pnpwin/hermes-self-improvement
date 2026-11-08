@@ -27,13 +27,25 @@ plugin executes, accounts, gates and (optionally) writes.
 2. A mode flag is a JSON boolean or the cycle stops; quoted strings are refused.
 3. Every model call is reserved before dispatch. A crash or timeout keeps the
    slot, because the provider may already have billed it.
+4. `max_concurrent_model_calls` is enforced by the ledger; an abandoned
+   reservation is reaped to `ambiguous` after the stale window, which frees the
+   concurrency slot but never refunds the daily counter.
+5. A job has a wall-clock deadline from `default_job_deadline_seconds`; once it
+   passes, the next stage is not dispatched and the job ends `deadline_exceeded`.
 4. A delta is small and typed: at most 8 operations, 3 files, 8000 characters,
    bound to the base digest it was produced from.
 5. A publish needs an `auto_publish` decision *and* a native writer. Without the
    writer the cycle stops at `human_approval_required`; nothing is written.
-6. A lesson never becomes an instruction without a Standard cycle and paired
+6. Heavy adds one bounded reviewer call. `changes_required` blocks publication
+   but does not rewrite the gate decision; the finding is preserved as evidence.
+7. A lesson never becomes an instruction without a Standard cycle and paired
    evidence.
-7. Budgets are local to the profile and are never described as provider quota.
+8. Budgets are local to the profile and are never described as provider quota.
+9. `--dedupe` skips a Lite cycle whose evidence already produced a lesson in the
+   same scope; without the flag every cycle is charged, because a repeated task
+   is a new observation.
+10. `report` groups repeated observations (`count >= 2`) as a signal that a
+    paired cycle is due; a group is never an automatic instruction change.
 
 ## Commands
 

@@ -235,3 +235,60 @@ def test_status_reports_local_scope_not_provider_quota(tmp_path):
     assert status["used_model_calls"] == 0
     assert status["remaining_model_calls"] == 24
     assert "not a provider subscription quota" in status["scope"]
+
+
+# -- M2: concurrency and stale reservations ------------------------------
+
+
+def _reserve(ledger, invocation_id, *, job_id="job-1", max_concurrent=None, stale=1800):
+    return ledger.reserve_call(
+        job_id,
+        invocation_id,
+        role="reflector",
+        route=ROUTE,
+        day=DAY,
+        daily_cap=24,
+        lite_daily_cap=8,
+        max_concurrent=max_concurrent,
+        stale_after_seconds=stale,
+    )
+
+
+def test_concurrency_limit_refuses_a_second_simultaneous_call(tmp_path):
+    ledger = _ledger(tmp_path)
+    _open_job(ledger, ceiling=6)
+    first = _reserve(ledger, "inv-1", max_concurrent=1)
+    assert first["admitted"] is True
+    second = _reserve(ledger, "inv-2", max_concurrent=1)
+    assert second == {"admitted": False, "reason": "concurrency_limit", "active": 1, "max_concurrent": 1}
+    ledger.finish_call("inv-1", status="completed")
+    third = _reserve(ledger, "inv-2", max_concurrent=1)
+    assert third["admitted"] is True
+
+
+def test_stale_reservation_frees_the_slot_but_keeps_the_spend(tmp_path):
+    clock = {"now": 1_000.0}
+    ledger = _ledger(tmp_path, clock=lambda: clock["now"])
+    _open_job(ledger, ceiling=6)
+    assert _reserve(ledger, "inv-1")["admitted"] is True
+
+    clock["now"] += 120
+    assert _reserve(ledger, "inv-2", max_concurrent=1)["reason"] == "concurrency_limit"
+
+    clock["now"] += 120  # inv-1 is now 240s old
+    reaped = ledger.reap_stale(older_than_seconds=1800)
+    assert reaped["reaped"] == 0  # 240s is younger than the default stale window
+
+    clock["now"] += 1800
+    assert ledger.reap_stale(older_than_seconds=1800)["reaped"] == 1
+    assert ledger.status(DAY, daily_cap=24, lite_daily_cap=8)["used_model_calls"] == 1
+    assert _reserve(ledger, "inv-3", max_concurrent=1)["admitted"] is True
+
+
+def test_stale_window_must_be_a_positive_integer(tmp_path):
+    ledger = _ledger(tmp_path)
+    _open_job(ledger)
+    with pytest.raises(BudgetError):
+        _reserve(ledger, "inv-1", stale=0)
+    with pytest.raises(BudgetError):
+        _reserve(ledger, "inv-1", max_concurrent=0)

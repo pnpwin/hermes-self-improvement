@@ -161,6 +161,29 @@ def test_policy_reads_settings_leaves_and_never_payload_routes(tmp_path):
     assert policy["budget"]["daily_model_calls"] == 24
 
 
+def test_policy_ignores_settings_owned_by_the_trial_runner(tmp_path):
+    """``settings`` is shared: ``primary``/``fallback_chain`` belong to the trial runner.
+
+    Rejecting them made every documented configuration break the learning lane.
+    A typo inside the policy namespace must still be refused.
+    """
+    route = {"provider": "eliza", "model": "~deepseek/deepseek-flash-latest", "reasoning": "low"}
+    policy = lp.build_policy(
+        {
+            "primary": route,
+            "fallback_chain": [route],
+            "lite_enabled": True,
+            "standard_enabled": False,
+            "heavy_enabled": False,
+            "learning_routes": {"reflector": route},
+        }
+    )
+    assert policy["pipeline"] == "lite"
+    assert policy["routes"]["reflector"] == route
+    with pytest.raises(lp.LearningPolicyError, match="learning_bugdet"):
+        lp.build_policy({"primary": route, "learning_bugdet": {"daily_model_calls": 4}})
+
+
 def test_summary_is_compact_and_secret_free():
     route = {"provider": "p", "model": "m", "reasoning": "low"}
     policy = lp.build_policy({"learning_routes": {"reflector": route}})

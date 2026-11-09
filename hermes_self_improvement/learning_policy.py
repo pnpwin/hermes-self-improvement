@@ -33,6 +33,9 @@ DEFAULT_BUDGET = {
     "auto_publish_enabled": False,
 }
 DEFAULT_ROUTES = {role: None for role in ROUTE_ROLES}
+# Settings in the same block that belong to the plugin's trial runner, not to this
+# policy. The policy ignores them instead of refusing the whole configuration.
+OTHER_SETTINGS = frozenset({"primary", "fallback_chain"})
 
 # Job ceilings are ceilings, not grants: a Heavy job also needs a daily
 # remainder large enough to hold the whole reservation.
@@ -232,7 +235,10 @@ def build_policy(
         if unknown:
             raise LearningPolicyError(f"Unknown policy override(s): {', '.join(sorted(unknown))}")
         base.update(overrides)
-    unknown_keys = set(base) - allowed
+    # ``settings`` is one shared block: the trial runner owns these keys and the
+    # policy neither reads nor interprets them. Ignoring them keeps a documented
+    # configuration from breaking the lane; every other key stays refused.
+    unknown_keys = set(base) - allowed - OTHER_SETTINGS
     if unknown_keys:
         raise LearningPolicyError(f"Unknown policy key(s): {', '.join(sorted(unknown_keys))}")
     flags: dict[str, Any] = {}

@@ -106,6 +106,26 @@ def test_serialized_evidence_keeps_its_fields(tmp_path):
     assert _evidence({"evidence": "[1, 2]"}) == {"text": "[1, 2]"}
 
 
+def test_a_broken_config_is_reported_instead_of_silently_defaulted(tmp_path):
+    """Settings that cannot be read must not look like "no settings were given"."""
+    home = _home(tmp_path)
+    assert rt.run_action({"action": "status"}, home=home)["settings_problem"] is None
+
+    # A tab is not valid YAML indentation: the lane would silently run defaults.
+    (home / "config.yaml").write_text(
+        "plugins:\n\tentries:\n    hermes-skillcraft:\n", encoding="utf-8"
+    )
+    status = rt.run_action({"action": "status"}, home=home)
+    assert "not valid YAML" in status["settings_problem"]
+    assert status["policy"]["pipeline"] == "lite+standard"  # defaults, now disclosed
+
+    (home / "config.yaml").write_text(
+        "plugins:\n  entries:\n    hermes-skillcraft:\n      settings: [1, 2]\n",
+        encoding="utf-8",
+    )
+    assert "is not a mapping" in rt.run_action({"action": "status"}, home=home)["settings_problem"]
+
+
 def test_status_is_read_only(tmp_path):
     home = _home(tmp_path)
     result = rt.run_action({"action": "status"}, home=home)

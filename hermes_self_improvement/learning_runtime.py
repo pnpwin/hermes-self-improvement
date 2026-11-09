@@ -159,6 +159,7 @@ def status(home: Any = None) -> dict[str, Any]:
     return {
         "ok": True,
         "action": "status",
+        "settings_problem": lp.settings_problem(home),
         "policy": lp.summarize(policy),
         "routes": lp.require_routes(policy, policy["pipeline"]),
         "budget": budget,
@@ -176,6 +177,7 @@ def check(home: Any = None, *, package_root: Any = None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "ok": True,
         "action": "check",
+        "settings_problem": lp.settings_problem(home),
         "policy": lp.summarize(policy),
         "routes": lp.require_routes(policy, policy["pipeline"]),
         "model_calls": 0,

@@ -60,6 +60,15 @@ plugin executes, accounts, gates and (optionally) writes.
 12. `report` groups repeated observations (`count >= 2`) as a signal that a
     paired cycle is due; a group is never an automatic instruction change.
 
+## Settings that cannot be read are disclosed
+
+The policy fails closed to defaults when `config.yaml` is missing, unreadable, or
+not valid YAML. That is safe, but it used to be silent, so a hand-edited file with
+a tab or a duplicate key ran the lane on defaults while the operator believed their
+settings applied. `status` now carries `settings_problem`: `null` when the settings
+were read, otherwise the reason they were ignored. Treat a non-null value as "the
+pipeline below is the default, not yours".
+
 ## Telemetry scope: why shadow collection is not wired
 
 `ExposureStore` is fed by explicit `exposure` events. Automatic shadow collection

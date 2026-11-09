@@ -189,6 +189,36 @@ def read_plugin_settings(home: Any = None) -> dict[str, Any]:
     return settings if isinstance(settings, dict) else {}
 
 
+def settings_problem(home: Any = None) -> str | None:
+    """Why the profile settings could not be read, or ``None`` when they were.
+
+    ``read_plugin_settings`` fails closed to defaults, which is safe but silent:
+    a hand-edited ``config.yaml`` with a tab or a duplicate key would quietly run
+    the lane on defaults while the operator believes their settings apply.
+    """
+    path = _home(home) / "config.yaml"
+    if not path.is_file():
+        return None
+    try:
+        import yaml
+    except Exception as exc:  # pragma: no cover - PyYAML ships with the host
+        return f"yaml is unavailable, so settings were ignored: {exc}"
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        return f"config.yaml is not valid YAML, so settings were ignored: {exc}"
+    entries = ((data.get("plugins") or {}).get("entries") or {}) if isinstance(data, dict) else {}
+    entry = entries.get(SETTINGS_PLUGIN)
+    if entry is None:
+        return None
+    if not isinstance(entry, dict):
+        return f"plugins.entries.{SETTINGS_PLUGIN} is not a mapping, so settings were ignored"
+    settings = entry.get("settings")
+    if settings is not None and not isinstance(settings, dict):
+        return f"plugins.entries.{SETTINGS_PLUGIN}.settings is not a mapping, so settings were ignored"
+    return None
+
+
 def build_policy(
     settings: dict[str, Any] | None = None,
     *,

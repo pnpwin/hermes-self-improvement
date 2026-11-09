@@ -106,6 +106,36 @@ def test_serialized_evidence_keeps_its_fields(tmp_path):
     assert _evidence({"evidence": "[1, 2]"}) == {"text": "[1, 2]"}
 
 
+def test_a_tool_enabled_role_is_refused_before_any_reservation(tmp_path):
+    """A wiring error must not consume a daily or Lite slot."""
+    with pytest.raises(ValueError, match="not a tool-free role"):
+        rt._role_runner("planner", route={"provider": "p", "model": "m", "reasoning": "low"})
+    with pytest.raises(ValueError, match="not a tool-free role"):
+        rt._role_runner("editor", route={"provider": "p", "model": "m", "reasoning": "low"})
+
+
+def test_every_learning_stage_dispatches_a_tool_free_role(tmp_path, monkeypatch):
+    """A tool-enabled role raises ValueError at dispatch, so the lane must never pick one."""
+    from hermes_self_improvement import constrained_agent
+    from hermes_self_improvement.role_tool_permissions import ROLE_TOOL_PERMISSIONS
+
+    seen: list[str] = []
+
+    def fake_agent(*, role, user_message, system_message, config, max_iterations=1):
+        seen.append(role)
+        return {"final_response": '{"ok": true}', "usage": {}}
+
+    monkeypatch.setattr(constrained_agent, "run_tool_free_role_agent", fake_agent)
+    home = _home(tmp_path)
+    deps = rt._build_deps(home, package_root=tmp_path, cases_path=None)
+    route = {"provider": "p", "model": "m", "reasoning": "low"}
+    for stage in ("reflector", "curator", "reviewer"):
+        deps[stage]({"prompt": "x"}, route)
+
+    assert seen == ["memory_extractor"] * 3
+    assert all(ROLE_TOOL_PERMISSIONS[r].tool_free for r in seen)
+
+
 def test_a_broken_config_is_reported_instead_of_silently_defaulted(tmp_path):
     """Settings that cannot be read must not look like "no settings were given"."""
     home = _home(tmp_path)

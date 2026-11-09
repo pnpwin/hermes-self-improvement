@@ -60,6 +60,22 @@ plugin executes, accounts, gates and (optionally) writes.
 12. `report` groups repeated observations (`count >= 2`) as a signal that a
     paired cycle is due; a group is never an automatic instruction change.
 
+## Every stage runs in a tool-free role slot
+
+Learning stages are text-only, so `_role_runner` refuses any role whose
+`ROLE_TOOL_PERMISSIONS` entry is not `tool_free` — at construction time, before a
+ledger slot is reserved. `planner` (skills) and `editor` (skills+memory) carry
+tools and would raise at dispatch anyway; refusing them early means a wiring
+mistake costs no daily or Lite slot. Stages run in the `memory_extractor` slot and
+the policy route supplies provider/model/effort.
+
+## Usage is recorded per invocation
+
+A completed call stores the token counters the agent actually accumulated
+(`input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`).
+Absent counters are dropped, not zeroed: unknown stays unknown, and no counter is
+inferred from text length.
+
 ## Settings that cannot be read are disclosed
 
 The policy fails closed to defaults when `config.yaml` is missing, unreadable, or

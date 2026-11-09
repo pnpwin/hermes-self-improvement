@@ -52,6 +52,10 @@ def _store(home: Any = None) -> ls.LessonStore:
     return ls.LessonStore(state_dir(home) / "lessons.sqlite3")
 
 
+#: The only kind of host role a learning stage may dispatch: text-only, no tools.
+TOOL_FREE_EXECUTOR = "memory_extractor"
+
+
 def _exposure(home: Any = None) -> se.ExposureStore:
     return se.ExposureStore(state_dir(home) / "exposure.sqlite3")
 
@@ -66,6 +70,12 @@ def _role_runner(
     """
     from .config import load_config
     from .constrained_agent import run_tool_free_role_agent
+    from .role_tool_permissions import ROLE_TOOL_PERMISSIONS
+
+    spec = ROLE_TOOL_PERMISSIONS.get(role)
+    if spec is None or not spec.tool_free:
+        # Fail while the callable is built, before a ledger slot is reserved.
+        raise ValueError(f"{role} is not a tool-free role; use run_constrained_role_agent")
 
     config = load_config()
     if route:
@@ -231,10 +241,12 @@ def _evidence(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_deps(home: Any, *, package_root: Path, cases_path: Any) -> dict[str, Any]:
+    # Every learning stage is text-only, so it must run in a tool-free role slot.
+    # `planner` (skills) and `editor` (skills+memory) carry tools and are refused here.
     deps: dict[str, Any] = {
-        "reflector": _model_callable("planner"),
-        "curator": _model_callable("editor"),
-        "reviewer": _model_callable("planner"),
+        "reflector": _model_callable(TOOL_FREE_EXECUTOR),
+        "curator": _model_callable(TOOL_FREE_EXECUTOR),
+        "reviewer": _model_callable(TOOL_FREE_EXECUTOR),
         "package_root": package_root,
         "home": lp._home(home),
     }

@@ -260,3 +260,40 @@ def test_constrained_agent_suppresses_internal_agent_stdout(monkeypatch, capsys)
     )
 
     assert capsys.readouterr().out == ""
+
+
+def test_tool_free_role_agent_reports_the_tokens_it_actually_used(monkeypatch):
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            self.session_input_tokens = 41
+            self.session_completion_tokens = 9
+
+        def run_conversation(self, **kwargs):
+            return {"final_response": '{"ok": true}', "messages": []}
+
+    monkeypatch.setattr("hermes_self_improvement.constrained_agent.AIAgent", FakeAgent)
+    out = run_tool_free_role_agent(
+        role="memory_extractor",
+        user_message="x",
+        system_message="y",
+        config={"model": {"memory_extractor": {"provider": "p", "model": "m", "api_key": "k"}}},
+    )
+    assert out["usage"] == {"input_tokens": 41, "output_tokens": 9}
+
+
+def test_tool_free_role_agent_leaves_usage_unknown_instead_of_zero(monkeypatch):
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            pass
+
+        def run_conversation(self, **kwargs):
+            return {"final_response": '{"ok": true}', "messages": []}
+
+    monkeypatch.setattr("hermes_self_improvement.constrained_agent.AIAgent", FakeAgent)
+    out = run_tool_free_role_agent(
+        role="memory_extractor",
+        user_message="x",
+        system_message="y",
+        config={"model": {"memory_extractor": {"provider": "p", "model": "m", "api_key": "k"}}},
+    )
+    assert "usage" not in out

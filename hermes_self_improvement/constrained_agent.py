@@ -142,6 +142,25 @@ def _normalize_agent_result(result: Any, *, allowed_tool_names: set[str] | froze
     return {"final_response": str(result)}
 
 
+def _agent_usage(agent: Any) -> dict[str, int]:
+    """Token counters the agent actually accumulated; absent counters stay unknown.
+
+    A missing attribute is not zero: reporting nothing is honest, reporting 0 would
+    claim the provider billed nothing.
+    """
+    usage: dict[str, int] = {}
+    for key, attr in (
+        ("input_tokens", "session_input_tokens"),
+        ("output_tokens", "session_completion_tokens"),
+        ("cache_read_tokens", "session_cache_read_tokens"),
+        ("cache_write_tokens", "session_cache_write_tokens"),
+    ):
+        value = getattr(agent, attr, None)
+        if isinstance(value, int) and value >= 0:
+            usage[key] = value
+    return usage
+
+
 def run_tool_free_role_agent(
     *,
     role: str,
@@ -174,7 +193,12 @@ def run_tool_free_role_agent(
     )
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         result = agent.run_conversation(user_message=user_message, system_message=system_message)
-    return _normalize_agent_result(result, allowed_tool_names=set())
+    normalized = _normalize_agent_result(result, allowed_tool_names=set())
+    if not isinstance(normalized.get("usage"), dict) or not normalized.get("usage"):
+        captured = _agent_usage(agent)
+        if captured:
+            normalized["usage"] = captured
+    return normalized
 
 
 def run_constrained_role_agent(

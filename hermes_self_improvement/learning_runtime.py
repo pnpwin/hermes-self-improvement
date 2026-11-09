@@ -215,7 +215,14 @@ def _evidence(args: dict[str, Any]) -> dict[str, Any]:
                 return loaded if isinstance(loaded, dict) else {"text": text}
             except json.JSONDecodeError:
                 return {"text": text[:20_000]}
-        return {"text": evidence[:20_000]}
+        # A caller that sends tools over JSON can only pass a serialized object.
+        # Parsing it here keeps the evidence fields (evidence_ids, observation)
+        # available to the stages instead of flattening them into one text blob.
+        try:
+            loaded = json.loads(evidence)
+        except json.JSONDecodeError:
+            return {"text": evidence[:20_000]}
+        return loaded if isinstance(loaded, dict) else {"text": evidence[:20_000]}
     if isinstance(evidence, dict):
         return evidence
     raise lm.LearningError("evidence must be an object or a path to JSON/text")

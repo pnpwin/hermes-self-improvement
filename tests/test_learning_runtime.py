@@ -89,6 +89,23 @@ def test_the_missing_writer_reason_is_specific(tmp_path, monkeypatch):
     assert rt._native_writer_reason(home) is None
 
 
+def test_serialized_evidence_keeps_its_fields(tmp_path):
+    """Skillcraft sends evidence as a JSON string; the fields must survive."""
+    import json as _json
+
+    from hermes_self_improvement.learning_runtime import _evidence
+
+    payload = {"observation": "the run failed twice", "evidence_ids": ["e1", "e2"]}
+    assert _evidence({"evidence": _json.dumps(payload)}) == payload
+
+    # A path still wins, and plain text is still text.
+    path = tmp_path / "ev.json"
+    path.write_text(_json.dumps(payload), encoding="utf-8")
+    assert _evidence({"evidence": str(path)}) == payload
+    assert _evidence({"evidence": "free text evidence"}) == {"text": "free text evidence"}
+    assert _evidence({"evidence": "[1, 2]"}) == {"text": "[1, 2]"}
+
+
 def test_status_is_read_only(tmp_path):
     home = _home(tmp_path)
     result = rt.run_action({"action": "status"}, home=home)

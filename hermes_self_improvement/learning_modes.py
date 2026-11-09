@@ -414,10 +414,11 @@ def _publish_if_allowed(
         return {"published": False, "decision": assessment["decision"], "reasons": assessment["reasons"]}
     writer = deps.get("native_writer")
     if not callable(writer):
+        reason = deps.get("native_writer_error") or "no host skill tool"
         return {
             "published": False,
             "decision": "human_approval_required",
-            "reasons": ["native_writer_unavailable"],
+            "reasons": [f"native_writer_unavailable: {reason}"],
         }
     target = Path(deps["package_root"]).resolve()
     try:

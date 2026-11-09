@@ -6,8 +6,9 @@ mutation keeps every native guard, lock, ledger and approval gate. Three rules
 hold here:
 
 * the base digest must still match, because a delta describes one revision;
-* every patch must match before the first write happens, so a rejected op cannot
-  leave a half-applied package;
+* every patch must match before the first write happens, and the affected bytes
+  are restored if the host refuses part-way, so a rejected op cannot leave a
+  half-applied package;
 * a staged or refused write is reported as not published, because an approval
   prompt is not a publication.
 """
@@ -34,6 +35,22 @@ def _load_manage() -> Callable[..., Any] | None:
     except Exception:
         return None
     return skill_manage if callable(skill_manage) else None
+
+
+def diagnose() -> str | None:
+    """Why the host writer is unavailable, or ``None`` when it is usable.
+
+    ``_load_manage`` fails closed on any import error, which is right but silent:
+    without this, a broken import looks exactly like a host that ships no skill
+    tool, and every Standard/Heavy cycle reports the same bare "unavailable".
+    """
+    try:
+        from tools.skill_manager_tool import skill_manage
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+    if not callable(skill_manage):
+        return "host skill tool is not callable"
+    return None
 
 
 def _payload(raw: Any) -> dict[str, Any]:
@@ -72,6 +89,31 @@ def _preflight(root: Path, ops: list[dict[str, Any]]) -> None:
             actual = hashlib.sha256(target.read_bytes()).hexdigest()
             if actual != op["expected_sha256"]:
                 raise WriterError(f"op {index}: {path} changed since the delta was produced")
+
+
+def _snapshot(root: Path, ops: list[dict[str, Any]]) -> dict[str, bytes | None]:
+    """Capture the original bytes of every path the delta touches, once each."""
+    saved: dict[str, bytes | None] = {}
+    for op in ops:
+        path = op["path"]
+        if path in saved:
+            continue
+        target = root / path
+        saved[path] = target.read_bytes() if target.is_file() else None
+    return saved
+
+
+def _restore(root: Path, saved: dict[str, bytes | None]) -> bool:
+    """Put the touched paths back exactly; report whether the base was restored."""
+    for path, original in saved.items():
+        target = root / path
+        if original is None:
+            if target.exists():
+                target.unlink()
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(original)
+    return True
 
 
 def _call(manage: Callable[..., Any], name: str, op: dict[str, Any]) -> dict[str, Any]:
@@ -116,27 +158,37 @@ def build_writer(*, manage: Callable[..., Any] | None = None) -> Callable[..., d
         structural = {"base_digest": delta.get("base_digest"), "ops": delta.get("ops")}
         clean = sd.validate_delta(structural, base_digest=base_digest, package_root=root)
         _preflight(root, clean["ops"])
+        saved = _snapshot(root, clean["ops"])
         name = root.name
         applied = 0
+
+        def _stop(reason: str, index: int, error: Any = None) -> dict[str, Any]:
+            # The host can still refuse or stage a write after earlier ops landed.
+            # Preflight cannot predict that, so undo what did land and say so.
+            rolled = applied > 0
+            if rolled:
+                _restore(root, saved)
+            outcome: dict[str, Any] = {
+                "published": False,
+                "writer": WRITER_NAME,
+                "reason": reason,
+                "applied_ops": applied,
+                "failed_op": index,
+                "rolled_back": rolled,
+                "digest_restored": sd.package_digest(root) == base_digest,
+            }
+            if error is not None:
+                outcome["error"] = error
+            return outcome
+
         for index, op in enumerate(clean["ops"]):
             result = _call(tool, name, op)
             if any(result.get(key) for key in _STAGE_KEYS):
-                return {
-                    "published": False,
-                    "writer": WRITER_NAME,
-                    "reason": "staged_for_approval",
-                    "applied_ops": applied,
-                    "failed_op": index,
-                }
+                return _stop("staged_for_approval", index)
             if result.get("success") is not True:
-                return {
-                    "published": False,
-                    "writer": WRITER_NAME,
-                    "reason": "write_refused",
-                    "applied_ops": applied,
-                    "failed_op": index,
-                    "error": result.get("error") or result.get("message"),
-                }
+                return _stop(
+                    "write_refused", index, result.get("error") or result.get("message")
+                )
             applied += 1
         return {
             "published": True,

@@ -28,16 +28,24 @@ def _delta(root: Path, ops: list[dict]) -> dict:
 class FakeTool:
     """Records the calls, optionally refuses or stages one of them."""
 
-    def __init__(self, root: Path, *, fail_at: int | None = None, staged: bool = False):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        fail_at: int | None = None,
+        staged: bool = False,
+        stage_at: int | None = None,
+    ):
         self.root = root
         self.fail_at = fail_at
         self.staged = staged
+        self.stage_at = stage_at
         self.calls: list[dict] = []
 
     def __call__(self, **kwargs):
         index = len(self.calls)
         self.calls.append(kwargs)
-        if self.staged:
+        if self.staged or (self.stage_at is not None and index == self.stage_at):
             return json.dumps({"success": True, "staged": True, "message": "awaiting approval"})
         if self.fail_at is not None and index == self.fail_at:
             return json.dumps({"success": False, "error": "patch did not match"})
@@ -106,6 +114,8 @@ def test_writer_refuses_a_staged_write_instead_of_claiming_success(tmp_path):
 
     assert result["published"] is False
     assert result["reason"] == "staged_for_approval"
+    assert result["rolled_back"] is False  # nothing landed, so nothing to undo
+    assert result["digest_restored"] is True
     assert sd.package_digest(root) == delta["base_digest"]
 
 
@@ -127,7 +137,7 @@ def test_a_missing_old_string_is_caught_before_any_write(tmp_path):
     assert tool.calls == []
 
 
-def test_a_refused_op_is_reported_with_the_number_already_applied(tmp_path):
+def test_a_refused_op_restores_the_package_it_already_touched(tmp_path):
     root = _package(tmp_path / "demo")
     delta = _delta(
         root,
@@ -145,7 +155,11 @@ def test_a_refused_op_is_reported_with_the_number_already_applied(tmp_path):
     assert result["reason"] == "write_refused"
     assert result["applied_ops"] == 1
     assert result["failed_op"] == 1
-    assert "line 1" in (root / "SKILL.md").read_text(encoding="utf-8")
+    assert result["rolled_back"] is True
+    assert result["digest_restored"] is True
+    # The op that landed is undone: the package is the revision the gate assessed.
+    assert sd.package_digest(root) == delta["base_digest"]
+    assert "line one" in (root / "SKILL.md").read_text(encoding="utf-8")
 
 
 def test_removal_requires_the_recorded_digest(tmp_path):
@@ -182,3 +196,48 @@ def test_removal_requires_the_recorded_digest(tmp_path):
 def test_no_host_tool_means_no_writer(tmp_path, monkeypatch):
     monkeypatch.setattr(lw, "_load_manage", lambda: None)
     assert lw.build_writer() is None
+
+
+def test_a_stage_after_one_op_also_restores_the_package(tmp_path):
+    """A deferred write must not leave the first op behind either."""
+    root = _package(tmp_path / "demo")
+    before = sd.package_digest(root)
+    delta = _delta(
+        root,
+        [
+            {"op": "patch_text", "path": "SKILL.md", "old_string": "line one", "new_string": "line 1"},
+            {"op": "patch_text", "path": "SKILL.md", "old_string": "line two", "new_string": "line 2"},
+        ],
+    )
+
+    result = lw.build_writer(manage=FakeTool(root, stage_at=1))(
+        delta=delta, target_root=str(root), base_digest=delta["base_digest"]
+    )
+
+    assert result["reason"] == "staged_for_approval"
+    assert result["applied_ops"] == 1
+    assert result["rolled_back"] is True
+    assert result["digest_restored"] is True
+    assert sd.package_digest(root) == before
+    assert "line one" in (root / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_a_created_support_file_is_removed_again_on_rollback(tmp_path):
+    """Rollback must not leave a file the delta created."""
+    root = _package(tmp_path / "demo")
+    before = sd.package_digest(root)
+    delta = _delta(
+        root,
+        [
+            {"op": "write_support_file", "path": "references/new.md", "content": "fresh"},
+            {"op": "patch_text", "path": "SKILL.md", "old_string": "line two", "new_string": "line 2"},
+        ],
+    )
+
+    result = lw.build_writer(manage=FakeTool(root, fail_at=1))(
+        delta=delta, target_root=str(root), base_digest=delta["base_digest"]
+    )
+
+    assert result["rolled_back"] is True
+    assert not (root / "references/new.md").exists()
+    assert sd.package_digest(root) == before

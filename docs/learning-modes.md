@@ -40,7 +40,10 @@ plugin executes, accounts, gates and (optionally) writes.
    write keeps the native guards, lock and approval gate. It refuses on base-digest
    drift, checks every patch match and removal digest *before* the first write, and
    reports a staged or refused write as `published: false` — an approval prompt is
-   not a publication. Such a refusal is `PublishDeferred`: the cycle completes and
+   not a publication. Because the host can refuse after an earlier op already
+   landed, the writer snapshots every touched path and restores it, so a refused
+   cycle leaves the package at the revision the gate assessed (`rolled_back`,
+   `digest_restored`). Such a refusal is `PublishDeferred`: the cycle completes and
    records `human_approval_required` with the writer's reason. Only a digest
    mismatch after a real write is an invalid stage, because the package then holds
    a revision nobody assessed. The host tool exists in the host, so the lane still needs

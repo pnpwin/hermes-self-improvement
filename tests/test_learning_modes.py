@@ -352,7 +352,7 @@ def test_standard_without_a_writer_keeps_the_incumbent(tmp_path):
     assert result["publish"] == {
         "published": False,
         "decision": "human_approval_required",
-        "reasons": ["native_writer_unavailable"],
+        "reasons": ["native_writer_unavailable: no host skill tool"],
     }
     assert result["instruction_changed"] is False
     assert sd.package_digest(root) == before

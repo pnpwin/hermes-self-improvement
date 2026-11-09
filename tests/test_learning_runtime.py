@@ -68,6 +68,27 @@ def test_auto_write_is_off_until_the_profile_opts_in(tmp_path, monkeypatch):
     assert callable(rt._native_writer(home))
 
 
+def test_the_missing_writer_reason_is_specific(tmp_path, monkeypatch):
+    """A disabled opt-in and a broken host import must not read the same."""
+    from hermes_self_improvement import learning_writer as lwd
+
+    home = _home(tmp_path)
+    assert "auto_publish_disabled" in (rt._native_writer_reason(home) or "")
+
+    lines = (home / "config.yaml").read_text(encoding="utf-8")
+    lines = lines.replace(
+        "        heavy_enabled: false",
+        "        heavy_enabled: false\n        learning_budget:\n          auto_publish_enabled: true",
+    )
+    (home / "config.yaml").write_text(lines, encoding="utf-8")
+    monkeypatch.setattr(lwd, "build_writer", lambda **kw: None)
+    monkeypatch.setattr(lwd, "diagnose", lambda: "ModuleNotFoundError: No module named 'ruamel'")
+    assert rt._native_writer_reason(home) == "ModuleNotFoundError: No module named 'ruamel'"
+
+    monkeypatch.setattr(lwd, "build_writer", lambda **kw: (lambda **kw: {"published": True}))
+    assert rt._native_writer_reason(home) is None
+
+
 def test_status_is_read_only(tmp_path):
     home = _home(tmp_path)
     result = rt.run_action({"action": "status"}, home=home)

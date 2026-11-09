@@ -291,6 +291,21 @@ def _native_writer(home: Any) -> Callable[..., dict[str, Any]] | None:
     return writer if callable(writer) else None
 
 
+def _native_writer_reason(home: Any) -> str | None:
+    """``None`` when a writer is available, else the reason it is not."""
+    from . import learning_writer as lwd
+    from .config import load_config
+
+    config = load_config() or {}
+    if callable(config.get("_learning_native_writer")):
+        return None
+    if not policy_for(home).get("budget", {}).get("auto_publish_enabled"):
+        return "auto_publish_disabled: set learning_budget.auto_publish_enabled to true"
+    if callable(lwd.build_writer()):
+        return None
+    return lwd.diagnose()
+
+
 def _cycle_id(args: dict[str, Any], action: str) -> str:
     raw = args.get("cycle_id")
     if isinstance(raw, str) and raw.strip():
@@ -340,6 +355,8 @@ def run_action(args: dict[str, Any], *, home: Any = None) -> dict[str, Any]:
         writer = _native_writer(home)
         if writer is not None:
             deps["native_writer"] = writer
+        else:
+            deps["native_writer_error"] = _native_writer_reason(home)
         result = lm.run_learning_cycle(
             policy=policy,
             ledger=_ledger(home),
